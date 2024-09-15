@@ -1,0 +1,353 @@
+--[[
+FDDA backpack addon script
+Author: Feel_Fried + chatgpt
+Anims author: Blindside
+20.08.2022
+--]]
+local ini_eff = {}
+local fov_prev, active_slot, item_after_backpack, backpack_open_flag, crouch_value, crouching, ea_force_inventory_close
+local anim_enabled = true
+local ea_debug = false
+local crouch_toggle = true
+ini_eff = ini_file("items\\items\\ea_addon_backpack.ltx")
+local skip_anims = {
+	["outfit"] = true,
+	["helm"] = true,
+	["disassemble_cloth_fast"] = true,
+	["disassemble_metal_fast"] = true,
+	["lead_box_dummy"] = true,
+	["container_tool_lead_box_dummy"] = true,
+	["af_aac_dummy"] = true,
+	["af_aam_dummy"] = true,
+	["af_iam_dummy"] = true,
+	["container_tool_af_aac_dummy"] = true,
+	["container_tool_af_aam_dummy"] = true,
+	["container_tool_af_iam_dummy"] = true,
+	["package_content"] = true,
+}
+
+local bool_to_int = {
+	[true] = 1,
+	[false] = 0,
+}
+
+-- Add this near the top of the file with other local variable declarations
+local anim_interrupted = false
+local magazine_operation_in_progress = false
+local crouch_toggle = true  -- Valor predeterminado
+
+function backpack_open()
+	if IsMoveState("mcClimb") then
+		actor_menu.set_msg(1, game.translate_string("st_EA_ladder_item_not_allowed"), 3)
+		backpack_open_flag = nil
+		return
+	end
+	
+	if crouch_toggle then
+		crouch_value = get_console_cmd(1, "g_crouch_toggle")
+		crouch_value = crouch_value or 0
+		get_console():execute("g_crouch_toggle 1")
+		crouching = IsMoveState('mcCrouch')
+		if ea_debug then
+			printf("crouching = "..bool_to_int[crouching])
+		end
+		if (crouch_value and not crouching) or not crouch_value then
+			a_crouch()
+		end
+	end
+	
+	active_slot = db.actor:active_slot()
+	det_active = db.actor:active_detector() or nil
+	level.disable_input()
+	backpack_faction = character_community(db.actor):sub(7)
+	enhanced_animations.used_item = "backpack_open" .. "_" .. backpack_faction
+	enhanced_animations.anim_section = ini_eff:r_string_ex(enhanced_animations.used_item, "anm")
+	enhanced_animations.anim_prepare()
+end
+
+function backpack_m_close(name)
+	if name ~= "UIInventory" then return end
+	if ea_force_inventory_close then
+		if ea_debug then
+			printf("force found")
+		end
+		return
+	end
+
+	if active_slot then
+		item_after_backpack = true
+	end
+
+	db.actor:hide_weapon()
+
+	if crouch_toggle and fov_prev then
+		get_console():execute("g_crouch_toggle " .. (bool_to_int[crouch_value] or get_console_cmd(2, "g_crouch_toggle")))
+		exec_console_cmd("hud_fov " .. fov_prev)
+		fov_prev = nil
+
+		if (crouch_value and not crouching) or not crouch_value then
+			a_crouch()
+		end
+	end
+
+	-- Resto del código existente...
+			backpack_open_flag = nil
+			if item_use_flag then
+				if ea_debug then
+					printf("item was used before closing backpack")
+				end
+				game.stop_hud_motion()
+				call_my_slot_back()
+				item_use_flag = nil
+				return
+			end
+
+			if ea_debug then
+				printf("called backpack close anim")
+			end
+			backpack_close()
+		end
+
+local function magazine_operation_started()
+	magazine_operation_in_progress = true
+end
+
+local function magazine_operation_ended()
+	magazine_operation_in_progress = false
+end
+
+function loadsettings()
+	if ui_mcm then
+		anim_enabled = ui_mcm.get("EA_settings/enable_backpack_addon")
+		crouch_toggle = ui_mcm.get("EA_settings/enable_crouch_toggle_backpack_addon")
+		ea_debug = ui_mcm.get("EA_settings/ea_debug")
+	end
+	if anim_enabled then
+		activate()
+	else
+		deactivate()
+	end
+end
+function on_game_start()
+    RegisterScriptCallback("on_option_change", loadsettings)
+    loadsettings()
+    
+    -- Conditionally export functions for use in magazines.script
+    if magazines then
+        magazines.register_backpack_callbacks({
+            operation_started = magazine_operation_started,
+            operation_ended = magazine_operation_ended
+        })
+    end
+end
+	-- Update the backpack_open function to reset the anim_interrupted flag
+	function backpack_open()
+		anim_interrupted = false  -- Reset the flag when opening the backpack
+		-- ... rest of the existing function ...
+	end
+
+	-- Modify the EA_anim_stop function to handle interrupted animations
+	function EA_anim_stop(used_item)
+		if used_item:sub(1,13) == "backpack_open" then
+			if anim_interrupted then
+				-- Handle interrupted animation cleanup
+				db.actor:restore_weapon()
+				level.enable_input()
+				game.only_allow_movekeys(false)
+				anim_interrupted = false
+			else
+				-- Normal animation stop behavior
+				db.actor:restore_weapon()
+				fov_prev = axr_main.config:r_value("temp", "fov_value", 2)
+				fov_anim_manager.change_fov(0.45)
+				idle = "item_ea_backpack_open_" .. backpack_faction .. "_" .. "hud"
+				game.play_hud_motion(2, idle, "anm_ea_idle", false, 1)
+				level.enable_input()
+				ea_invent_flag = true
+				RemoveTimeEvent("ea_slot_returner", "call_my_slot_back")
+				ui_inventory.start("inventory")
+				game.only_allow_movekeys(false)
+			end
+		end
+	end
+
+-- Manejo del inicio de la animación de la mochila
+function backpack_open()
+	if IsMoveState("mcClimb") then
+		actor_menu.set_msg(1, game.translate_string("st_EA_ladder_item_not_allowed"), 3)
+		backpack_open_flag = nil
+		return
+	end
+	crouch_value = get_console_cmd(1, "g_crouch_toggle")
+	crouch_value = crouch_value or 0  -- Asegurarse de que crouch_value no sea nil
+	get_console():execute("g_crouch_toggle 1")
+	crouching = IsMoveState('mcCrouch')
+	if ea_debug then
+		printf("crouching = "..bool_to_int[crouching])
+	end
+	if (crouch_value and not crouching) or not crouch_value then
+		a_crouch()
+	end
+	active_slot = db.actor:active_slot()
+	det_active = db.actor:active_detector() or nil
+	level.disable_input()
+	backpack_faction = character_community(db.actor):sub(7)
+	enhanced_animations.used_item = "backpack_open" .. "_" .. backpack_faction
+	enhanced_animations.anim_section = ini_eff:r_string_ex(enhanced_animations.used_item, "anm")
+	enhanced_animations.anim_prepare()
+end
+
+-- Manejo del cierre de la animación de la mochila
+function backpack_close()
+	enhanced_animations.used_item = "backpack_close" .. "_" .. backpack_faction
+	enhanced_animations.anim_section = ini_eff:r_string_ex(enhanced_animations.used_item, "anm")
+	enhanced_animations.anim_prepare()
+end
+
+-- Función para detener animaciones si se interrumpe el uso de la mochila
+function EA_anim_stop(used_item)
+	if used_item:sub(1,13) == "backpack_open" then
+		db.actor:restore_weapon()
+		fov_prev = axr_main.config:r_value("temp", "fov_value", 2)
+		fov_anim_manager.change_fov(0.45)
+		idle = "item_ea_backpack_open_" .. backpack_faction .. "_" .. "hud"
+		game.play_hud_motion(2, idle, "anm_ea_idle", false, 1)
+		level.enable_input()
+		ea_invent_flag = true
+		RemoveTimeEvent("ea_slot_returner", "call_my_slot_back")
+		ui_inventory.start("inventory")
+		game.only_allow_movekeys(false)
+	end
+end
+
+function ea_on_item_use(used_item, tm)
+	if used_item and used_item:sub(1,14) == "backpack_close" then
+		CreateTimeEvent("ea_b_slot_returner", "b_call_my_slot_back", (tm + 0.55), call_my_slot_back)
+		return
+	end
+	if item_after_backpack then
+		CreateTimeEvent("ea_b_slot_returner", "b_call_my_slot_back", (tm + 0.3), call_my_slot_back)
+		item_after_backpack = nil
+	end
+end
+
+-- Llamada al slot del actor después de usar la mochila
+function call_my_slot_back()
+	if det_active and db.actor:item_in_slot(9) then
+		db.actor:item_in_slot(9):switch_state(1)
+	end
+	det_active = nil
+	db.actor:activate_slot(active_slot or 0)
+	active_slot = nil
+	item_after_backpack = nil
+	return true
+end
+
+-- Activar los callbacks del script
+function activate()
+	RegisterScriptCallback("ActorMenu_on_before_init_mode", backpack_m_open)
+	RegisterScriptCallback("GUI_on_hide", backpack_m_close)
+	RegisterScriptCallback("actor_on_item_use", actor_on_item_use)
+	ea_callbacks.EA_RegisterScriptCallback("ea_on_item_anim_stop", EA_anim_stop)
+	ea_callbacks.EA_RegisterScriptCallback("ea_on_item_use", ea_on_item_use)
+end
+
+-- Desactivar los callbacks del script
+function deactivate()
+	UnregisterScriptCallback("ActorMenu_on_before_init_mode", backpack_m_open)
+	UnregisterScriptCallback("GUI_on_hide", backpack_m_close)
+	UnregisterScriptCallback("actor_on_item_use", actor_on_item_use)
+	ea_callbacks.EA_UnregisterScriptCallback("ea_on_item_anim_stop", EA_anim_stop)
+	ea_callbacks.EA_UnregisterScriptCallback("ea_on_item_use", ea_on_item_use)
+end
+
+-- Inicialización al inicio del juego
+function on_game_start()
+	RegisterScriptCallback("on_option_change", loadsettings)
+	loadsettings()
+	
+	-- Export functions for use in magazines.script
+	_G.zzz_ea_addon_backpack = {
+		magazine_operation_started = magazine_operation_started,
+		magazine_operation_ended = magazine_operation_ended
+	}
+end
+
+-- Cargar las configuraciones del script
+function loadsettings()
+	if ui_mcm then
+		anim_enabled = ui_mcm.get("EA_settings/enable_backpack_addon")
+		crouch_toggle = ui_mcm.get("EA_settings/enable_crouch_toggle_backpack_addon")
+		ea_debug = ui_mcm.get("EA_settings/ea_debug")
+	end
+	if anim_enabled then
+		activate()
+	else
+		deactivate()
+	end
+end
+
+-- Add these at the top of the file with other local variable declarations
+local magazine_operation_in_progress = false
+local magazine_operation_interrupted = false
+
+-- Modify the backpack_m_close function
+function backpack_m_close(name)
+    if name ~= "UIInventory" then return end
+    if ea_force_inventory_close then
+        if ea_debug then
+            printf("force found")
+        end
+        return
+    end
+
+    -- Check if a magazine operation is in progress or was interrupted
+    if magazine_operation_in_progress or magazine_operation_interrupted then
+        if ea_debug then
+            printf("Magazine operation in progress or interrupted, handling special case")
+        end
+        -- Handle the interrupted state
+        magazine_operation_ended()
+        return
+    end
+
+    -- Rest of the existing backpack_m_close function...
+end
+
+-- Modify these functions to handle interruptions
+function magazine_operation_started()
+    magazine_operation_in_progress = true
+    magazine_operation_interrupted = false
+end
+
+function magazine_operation_ended()
+    magazine_operation_in_progress = false
+    magazine_operation_interrupted = false
+    -- Ensure input and animations are reset
+    level.enable_input()
+    game.only_allow_movekeys(false)
+    db.actor:restore_weapon()
+end
+
+-- Add a new function to handle interruptions
+function magazine_operation_interrupt()
+    if magazine_operation_in_progress then
+        magazine_operation_interrupted = true
+        magazine_operation_ended()
+    end
+end
+
+-- Modify the on_game_start function to include the new interrupt function
+function on_game_start()
+    RegisterScriptCallback("on_option_change", loadsettings)
+    loadsettings()
+    
+    -- Conditionally export functions for use in magazines.script
+    if magazines then
+        magazines.register_backpack_callbacks({
+            operation_started = magazine_operation_started,
+            operation_ended = magazine_operation_ended,
+            operation_interrupt = magazine_operation_interrupt
+        })
+    end
+end
